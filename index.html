@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Together - Online Co-Op Arcade</title>
+    <title>Together - Multi-Room Co-Op</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
@@ -69,7 +69,7 @@
             justify-content: space-between;
             width: 800px;
             margin-bottom: 10px;
-            font-size: 18px;
+            font-size: 16px;
             font-weight: bold;
         }
         canvas {
@@ -93,8 +93,8 @@
 
     <!-- LOBBY -->
     <div id="lobby">
-        <h1>TOGETHER MULTIPLAYER</h1>
-        <p style="color: #94a3b8; font-size: 14px; margin-bottom: 20px;">Race the clock, collect gems, and escape together!</p>
+        <h1>TOGETHER: ESCAPE ROOMS</h1>
+        <p style="color: #94a3b8; font-size: 14px; margin-bottom: 20px;">4 rooms of escalating co-op puzzle gauntlets!</p>
         
         <button class="btn" onclick="createRoom()">Create Room (Player 1)</button>
         <div style="margin: 14px 0; color: #475569; font-weight: bold;">— OR —</div>
@@ -108,15 +108,15 @@
     <div id="game-container">
         <div id="hud">
             <div><span id="role-badge" class="badge"></span></div>
-            <div style="color: #00d2ff;">⏱️ TIME: <span id="timer">60</span>s</div>
-            <div style="color: #ffbe0b;">💎 SCORE: <span id="score">0</span></div>
+            <div style="color: #00d2ff;">🏰 ROOM: <span id="room-num">1</span>/4</div>
+            <div style="color: #ffbe0b;">💎 TEAM SCORE: <span id="score">0</span></div>
+            <div style="color: #a855f7;">🤝 TEAMWORK: <span id="teamwork-rank">A</span></div>
         </div>
         <canvas id="gameCanvas" width="800" height="500"></canvas>
         <div id="status">Get ready to work together!</div>
     </div>
 
     <script>
-        // --- SOUND EFFECTS SYNTHESIZER ---
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         function playSound(type) {
             if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -139,6 +139,13 @@
                 gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
                 gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
                 osc.start(); osc.stop(audioCtx.currentTime + 0.15);
+            } else if (type === 'hit') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(300, audioCtx.currentTime);
+                osc.frequency.linearRampToValueAtTime(100, audioCtx.currentTime + 0.2);
+                gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+                osc.start(); osc.stop(audioCtx.currentTime + 0.2);
             } else if (type === 'win') {
                 osc.type = 'triangle';
                 osc.frequency.setValueAtTime(400, audioCtx.currentTime);
@@ -150,7 +157,6 @@
             }
         }
 
-        // --- GAME ELEMENTS & NETWORK ---
         const canvas = document.getElementById("gameCanvas");
         const ctx = canvas.getContext("2d");
         const lobbyEl = document.getElementById("lobby");
@@ -158,8 +164,9 @@
         const lobbyStatus = document.getElementById("lobby-status");
         const statusEl = document.getElementById("status");
         const roleBadge = document.getElementById("role-badge");
-        const timerEl = document.getElementById("timer");
+        const roomNumEl = document.getElementById("room-num");
         const scoreEl = document.getElementById("score");
+        const rankEl = document.getElementById("teamwork-rank");
 
         let peer = null, conn = null, myRole = null;
         const keys = {};
@@ -167,14 +174,15 @@
         window.addEventListener("keyup", (e) => keys[e.code] = false);
 
         let p2Inputs = {};
-        let timeLeft = 60;
         let score = 0;
+        let deaths = 0;
         let particles = [];
         let screenShake = 0;
+        let currentLevel = 0;
 
         function createRoom() {
             const roomCode = Math.floor(1000 + Math.random() * 9000).toString();
-            peer = new Peer("together-v2-" + roomCode);
+            peer = new Peer("together-v4-" + roomCode);
 
             peer.on('open', () => {
                 myRole = 'p1';
@@ -190,7 +198,7 @@
             peer = new Peer();
             peer.on('open', () => {
                 myRole = 'p2';
-                conn = peer.connect("together-v2-" + code);
+                conn = peer.connect("together-v4-" + code);
                 setupConnection();
             });
         }
@@ -203,11 +211,11 @@
                 if (myRole === 'p1') {
                     roleBadge.innerText = "Player 1 (Blue)";
                     roleBadge.className = "badge p1-badge";
-                    setInterval(() => { if (timeLeft > 0) timeLeft--; }, 1000);
                 } else {
                     roleBadge.innerText = "Player 2 (Pink)";
                     roleBadge.className = "badge p2-badge";
                 }
+                loadLevel(0);
                 requestAnimationFrame(gameLoop);
             });
 
@@ -217,33 +225,95 @@
             });
         }
 
-        const level = {
-            p1Start: { x: 50, y: 100 },
-            p2Start: { x: 50, y: 350 },
-            walls: [
-                { x: 0, y: 245, w: 800, h: 10 },
-                { x: 380, y: 0, w: 20, h: 170 },
-                { x: 380, y: 255, w: 20, h: 170 }
-            ],
-            plates: [
-                { x: 220, y: 100, w: 32, h: 32, color: "#ff006e", targetDoor: 0, active: false },
-                { x: 220, y: 350, w: 32, h: 32, color: "#3a86ff", targetDoor: 1, active: false }
-            ],
-            doors: [
-                { x: 380, y: 170, w: 20, h: 75, color: "#ff006e", open: false },
-                { x: 380, y: 425, w: 20, h: 75, color: "#3a86ff", open: false }
-            ],
-            gems: [
-                { x: 150, y: 110, size: 14, taken: false },
-                { x: 150, y: 360, size: 14, taken: false },
-                { x: 500, y: 100, size: 14, taken: false },
-                { x: 500, y: 350, size: 14, taken: false }
-            ],
-            exits: [
-                { x: 720, y: 80, w: 45, h: 80 },
-                { x: 720, y: 330, w: 45, h: 80 }
-            ]
-        };
+        // 4 ESCAPE ROOMS WITH INCREASING DIFFICULTY
+        const levels = [
+            // ROOM 1: TUTORIAL
+            {
+                p1Start: { x: 50, y: 100 }, p2Start: { x: 50, y: 350 },
+                walls: [
+                    { x: 0, y: 245, w: 800, h: 10 },
+                    { x: 380, y: 0, w: 20, h: 170 }, { x: 380, y: 255, w: 20, h: 170 }
+                ],
+                hazards: [],
+                plates: [
+                    { x: 220, y: 100, w: 32, h: 32, color: "#3a86ff", targetDoor: 1, active: false },
+                    { x: 220, y: 350, w: 32, h: 32, color: "#ff006e", targetDoor: 0, active: false }
+                ],
+                doors: [
+                    { x: 380, y: 170, w: 20, h: 75, color: "#ff006e", open: false },
+                    { x: 380, y: 255, w: 20, h: 75, color: "#3a86ff", open: false }
+                ],
+                gems: [{ x: 150, y: 110, size: 14, taken: false }, { x: 500, y: 350, size: 14, taken: false }],
+                exits: [{ x: 720, y: 80, w: 45, h: 80 }, { x: 720, y: 330, w: 45, h: 80 }]
+            },
+            // ROOM 2: DOUBLE LOCK
+            {
+                p1Start: { x: 50, y: 80 }, p2Start: { x: 50, y: 330 },
+                walls: [
+                    { x: 0, y: 245, w: 800, h: 10 },
+                    { x: 250, y: 0, w: 20, h: 160 }, { x: 520, y: 80, w: 20, h: 165 },
+                    { x: 350, y: 255, w: 20, h: 160 }
+                ],
+                hazards: [],
+                plates: [
+                    { x: 140, y: 180, w: 32, h: 32, color: "#3a86ff", targetDoor: 1, active: false },
+                    { x: 280, y: 350, w: 32, h: 32, color: "#ff006e", targetDoor: 0, active: false }
+                ],
+                doors: [
+                    { x: 520, y: 0, w: 20, h: 80, color: "#ff006e", open: false },
+                    { x: 350, y: 415, w: 20, h: 85, color: "#3a86ff", open: false }
+                ],
+                gems: [{ x: 320, y: 80, size: 14, taken: false }, { x: 620, y: 350, size: 14, taken: false }],
+                exits: [{ x: 720, y: 80, w: 45, h: 80 }, { x: 720, y: 330, w: 45, h: 80 }]
+            },
+            // ROOM 3: HAZARD DODGE
+            {
+                p1Start: { x: 40, y: 100 }, p2Start: { x: 40, y: 350 },
+                walls: [
+                    { x: 0, y: 245, w: 800, h: 10 },
+                    { x: 300, y: 0, w: 20, h: 150 }, { x: 550, y: 90, w: 20, h: 155 },
+                    { x: 400, y: 255, w: 20, h: 160 }
+                ],
+                hazards: [
+                    { x: 180, y: 30, w: 12, h: 100, vy: 3, minY: 10, maxY: 140 },
+                    { x: 450, y: 270, w: 12, h: 100, vy: -3, minY: 260, maxY: 380 }
+                ],
+                plates: [
+                    { x: 200, y: 180, w: 32, h: 32, color: "#3a86ff", targetDoor: 1, active: false },
+                    { x: 220, y: 350, w: 32, h: 32, color: "#ff006e", targetDoor: 0, active: false }
+                ],
+                doors: [
+                    { x: 550, y: 0, w: 20, h: 90, color: "#ff006e", open: false },
+                    { x: 400, y: 415, w: 20, h: 85, color: "#3a86ff", open: false }
+                ],
+                gems: [{ x: 400, y: 100, size: 14, taken: false }, { x: 580, y: 350, size: 14, taken: false }],
+                exits: [{ x: 720, y: 80, w: 45, h: 80 }, { x: 720, y: 330, w: 45, h: 80 }]
+            },
+            // ROOM 4: THE GAUNTLET
+            {
+                p1Start: { x: 40, y: 60 }, p2Start: { x: 40, y: 300 },
+                walls: [
+                    { x: 0, y: 245, w: 800, h: 10 },
+                    { x: 180, y: 0, w: 20, h: 150 }, { x: 380, y: 90, w: 20, h: 155 }, { x: 580, y: 0, w: 20, h: 150 },
+                    { x: 280, y: 255, w: 20, h: 160 }, { x: 500, y: 340, w: 20, h: 160 }
+                ],
+                hazards: [
+                    { x: 280, y: 30, w: 12, h: 90, vy: 4, minY: 10, maxY: 140 },
+                    { x: 480, y: 30, w: 12, h: 90, vy: -4, minY: 10, maxY: 140 },
+                    { x: 380, y: 270, w: 12, h: 90, vy: 4, minY: 260, maxY: 390 }
+                ],
+                plates: [
+                    { x: 100, y: 180, w: 32, h: 32, color: "#3a86ff", targetDoor: 1, active: false },
+                    { x: 200, y: 350, w: 32, h: 32, color: "#ff006e", targetDoor: 0, active: false }
+                ],
+                doors: [
+                    { x: 580, y: 150, w: 20, h: 95, color: "#ff006e", open: false },
+                    { x: 500, y: 255, w: 20, h: 85, color: "#3a86ff", open: false }
+                ],
+                gems: [{ x: 280, y: 180, size: 14, taken: false }, { x: 420, y: 350, size: 14, taken: false }, { x: 650, y: 100, size: 14, taken: false }],
+                exits: [{ x: 720, y: 80, w: 45, h: 80 }, { x: 720, y: 330, w: 45, h: 80 }]
+            }
+        ];
 
         class Player {
             constructor(x, y, color) {
@@ -266,11 +336,12 @@
             }
 
             checkCollision() {
+                const lvl = levels[currentLevel];
                 if (this.x < 0 || this.x + this.size > canvas.width || 
                     this.y < 0 || this.y + this.size > canvas.height) return true;
 
-                for (let wall of level.walls) if (this.intersects(wall)) return true;
-                for (let door of level.doors) if (!door.open && this.intersects(door)) return true;
+                for (let wall of lvl.walls) if (this.intersects(wall)) return true;
+                for (let door of lvl.doors) if (!door.open && this.intersects(door)) return true;
                 return false;
             }
 
@@ -290,8 +361,25 @@
             }
         }
 
-        let p1 = new Player(level.p1Start.x, level.p1Start.y, "#3a86ff");
-        let p2 = new Player(level.p2Start.x, level.p2Start.y, "#ff006e");
+        let p1 = new Player(0, 0, "#3a86ff");
+        let p2 = new Player(0, 0, "#ff006e");
+
+        function loadLevel(index) {
+            currentLevel = index;
+            const lvl = levels[currentLevel];
+            p1.x = lvl.p1Start.x; p1.y = lvl.p1Start.y;
+            p2.x = lvl.p2Start.x; p2.y = lvl.p2Start.y;
+            lvl.plates.forEach(p => p.active = false);
+            lvl.doors.forEach(d => d.open = false);
+            lvl.gems.forEach(g => g.taken = false);
+        }
+
+        function calculateRank() {
+            if (deaths === 0 && score >= 1500) return "S+ (FLAWLESS)";
+            if (deaths <= 2) return "A (GREAT TEAM)";
+            if (deaths <= 5) return "B (SOLID)";
+            return "C (NEEDS WORK)";
+        }
 
         function addParticles(x, y, color) {
             for (let i = 0; i < 8; i++) {
@@ -305,25 +393,45 @@
         }
 
         function syncGameState(state) {
+            currentLevel = state.currentLevel;
             p1.x = state.p1.x; p1.y = state.p1.y;
             p2.x = state.p2.x; p2.y = state.p2.y;
-            level.doors = state.doors;
-            level.plates = state.plates;
-            level.gems = state.gems;
-            timeLeft = state.timeLeft;
+            levels[currentLevel].doors = state.doors;
+            levels[currentLevel].plates = state.plates;
+            levels[currentLevel].gems = state.gems;
+            levels[currentLevel].hazards = state.hazards;
             score = state.score;
+            deaths = state.deaths;
             statusEl.innerText = state.status;
-            timerEl.innerText = timeLeft;
+            roomNumEl.innerText = currentLevel + 1;
             scoreEl.innerText = score;
+            rankEl.innerText = calculateRank();
         }
 
         function update() {
             if (myRole === 'p1') {
+                const lvl = levels[currentLevel];
                 p1.move(keys);
                 p2.move(p2Inputs);
 
+                // Move Hazards
+                lvl.hazards.forEach(h => {
+                    h.y += h.vy;
+                    if (h.y <= h.minY || h.y >= h.maxY) h.vy *= -1;
+
+                    // Hazard collision check
+                    if (p1.intersects(h) || p2.intersects(h)) {
+                        playSound('hit');
+                        deaths++;
+                        screenShake = 10;
+                        p1.x = lvl.p1Start.x; p1.y = lvl.p1Start.y;
+                        p2.x = lvl.p2Start.x; p2.y = lvl.p2Start.y;
+                        statusEl.innerText = "⚡ HIT A HAZARD! ROOM RESET!";
+                    }
+                });
+
                 // Pressure Plates & Doors
-                level.plates.forEach((plate) => {
+                lvl.plates.forEach((plate) => {
                     const activeNow = p1.intersects(plate) || p2.intersects(plate);
                     if (activeNow && !plate.active) {
                         playSound('door');
@@ -331,41 +439,44 @@
                         addParticles(plate.x + 16, plate.y + 16, plate.color);
                     }
                     plate.active = activeNow;
-                    level.doors[plate.targetDoor].open = plate.active;
+                    lvl.doors[plate.targetDoor].open = plate.active;
                 });
 
                 // Gem Pickups
-                level.gems.forEach(gem => {
+                lvl.gems.forEach(gem => {
                     if (!gem.taken && (p1.intersects(gem) || p2.intersects(gem))) {
                         gem.taken = true;
-                        score += 250;
+                        score += 300;
                         playSound('gem');
                         addParticles(gem.x, gem.y, "#ffbe0b");
                     }
                 });
 
-                // End Logic
-                if (timeLeft <= 0) {
-                    statusEl.innerText = "💥 TIME EXPIRED! TRY AGAIN!";
-                } else if (p1.intersects(level.exits[0]) && p2.intersects(level.exits[1])) {
-                    if (statusEl.innerText !== "🎉 ESCAPED! FINAL SCORE: " + (score + timeLeft * 10)) {
+                // Progression
+                if (p1.intersects(lvl.exits[0]) && p2.intersects(lvl.exits[1])) {
+                    if (currentLevel + 1 < levels.length) {
                         playSound('win');
-                        score += timeLeft * 10;
+                        loadLevel(currentLevel + 1);
+                        statusEl.innerText = `🎉 CLEARED ROOM ${currentLevel}! ENTERING ROOM ${currentLevel + 1}...`;
+                    } else {
+                        if (!statusEl.innerText.includes("VICTORY")) {
+                            playSound('win');
+                        }
+                        statusEl.innerText = `🏆 VICTORY! ALL 4 ESCAPE ROOMS CLEARED! RANK: ${calculateRank()}`;
                     }
-                    statusEl.innerText = "🎉 ESCAPED! FINAL SCORE: " + score;
-                } else {
-                    statusEl.innerText = "Step on matching plates to open doors!";
                 }
 
-                timerEl.innerText = timeLeft;
+                roomNumEl.innerText = currentLevel + 1;
                 scoreEl.innerText = score;
+                rankEl.innerText = calculateRank();
 
                 if (conn && conn.open) {
                     conn.send({
                         gameState: {
+                            currentLevel: currentLevel,
                             p1: { x: p1.x, y: p1.y }, p2: { x: p2.x, y: p2.y },
-                            doors: level.doors, plates: level.plates, gems: level.gems,
-                            timeLeft: timeLeft, score: score, status: statusEl.innerText
+                            doors: lvl.doors, plates: lvl.plates, gems: lvl.gems, hazards: lvl.hazards,
+                            score: score, deaths: deaths, status: statusEl.innerText
                         }
                     });
                 }
@@ -373,7 +484,6 @@
                 conn.send({ inputs: keys });
             }
 
-            // Update local particles & shake
             particles.forEach(p => { p.x += p.vx; p.y += p.vy; p.life--; });
             particles = particles.filter(p => p.life > 0);
             if (screenShake > 0) screenShake--;
@@ -386,29 +496,36 @@
             }
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const lvl = levels[currentLevel];
 
-            // Draw Plates
-            level.plates.forEach(plate => {
+            // Plates
+            lvl.plates.forEach(plate => {
                 ctx.fillStyle = plate.active ? "#80b918" : plate.color;
                 ctx.globalAlpha = plate.active ? 0.9 : 0.4;
                 ctx.fillRect(plate.x, plate.y, plate.w, plate.h);
                 ctx.globalAlpha = 1.0;
             });
 
-            // Draw Doors
-            level.doors.forEach(door => {
+            // Doors
+            lvl.doors.forEach(door => {
                 if (!door.open) {
                     ctx.fillStyle = door.color;
                     ctx.fillRect(door.x, door.y, door.w, door.h);
                 }
             });
 
-            // Draw Walls
+            // Walls
             ctx.fillStyle = "#232b3e";
-            level.walls.forEach(wall => ctx.fillRect(wall.x, wall.y, wall.w, wall.h));
+            lvl.walls.forEach(wall => ctx.fillRect(wall.x, wall.y, wall.w, wall.h));
 
-            // Draw Gems
-            level.gems.forEach(gem => {
+            // Moving Hazards
+            ctx.fillStyle = "#ef4444";
+            ctx.shadowColor = "#ef4444"; ctx.shadowBlur = 8;
+            lvl.hazards.forEach(h => ctx.fillRect(h.x, h.y, h.w, h.h));
+            ctx.shadowBlur = 0;
+
+            // Gems
+            lvl.gems.forEach(gem => {
                 if (!gem.taken) {
                     ctx.fillStyle = "#ffbe0b";
                     ctx.beginPath();
@@ -417,21 +534,21 @@
                 }
             });
 
-            // Draw Exits
-            level.exits.forEach(exit => {
+            // Exits
+            lvl.exits.forEach(exit => {
                 ctx.fillStyle = "#52b788";
                 ctx.shadowColor = "#52b788"; ctx.shadowBlur = 10;
                 ctx.fillRect(exit.x, exit.y, exit.w, exit.h);
                 ctx.shadowBlur = 0;
             });
 
-            // Draw Particles
+            // Particles
             particles.forEach(p => {
                 ctx.fillStyle = p.color;
                 ctx.fillRect(p.x, p.y, 4, 4);
             });
 
-            // Draw Players
+            // Players
             p1.draw();
             p2.draw();
 
