@@ -1,0 +1,14 @@
+{
+  "name": "together-3d-mmo",
+  "version": "1.0.0",
+  "description": "Full-stack 3D Multiplayer Browser Game",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "three": "^0.165.0"
+  }
+}
