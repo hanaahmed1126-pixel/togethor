@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Together - Online Multiplayer</title>
+    <!-- PeerJS for WebRTC Connection -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+        body {
+            background-color: #0d0f12;
+            color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        #lobby {
+            background: #161b22;
+            padding: 24px;
+            border-radius: 12px;
+            border: 2px solid #1e2638;
+            text-align: center;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            max-width: 400px;
+            width: 90%;
+        }
+        h1 {
+            font-size: 26px;
+            letter-spacing: 2px;
+            color: #00d2ff;
+            margin-bottom: 12px;
+        }
+        .btn {
+            background: #00d2ff;
+            color: #0d0f12;
+            border: none;
+            padding: 10px 18px;
+            font-size: 15px;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+            margin: 6px;
+            transition: 0.2s;
+        }
+        .btn:hover { background: #33e0ff; }
+        input {
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid #2b3548;
+            background: #0d0f12;
+            color: #fff;
+            text-align: center;
+            font-size: 16px;
+            width: 80%;
+            margin-bottom: 10px;
+        }
+        #game-container {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+        }
+        canvas {
+            border: 3px solid #1e2638;
+            border-radius: 8px;
+            box-shadow: 0px 10px 30px rgba(0, 0, 0, 0.7);
+            background-color: #161b22;
+        }
+        #status {
+            margin-top: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            color: #ffbe0b;
+        }
+        .badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .p1-badge { background: #3a86ff; }
+        .p2-badge { background: #ff006e; }
+    </style>
+</head>
+<body>
+
+    <!-- LOBBY SCREEN -->
+    <div id="lobby">
+        <h1>TOGETHER MULTIPLAYER</h1>
+        <p style="color: #a0aab5; font-size: 14px; margin-bottom: 16px;">Play together live across any two devices!</p>
+        
+        <div>
+            <button class="btn" onclick="createRoom()">Create Room (Player 1)</button>
+        </div>
+        
+        <div style="margin: 15px 0; color: #495057;">— OR —</div>
+        
+        <div>
+            <input type="text" id="join-code" placeholder="Enter Room Code">
+            <button class="btn" style="background:#ff006e; color:#fff;" onclick="joinRoom()">Join Room (Player 2)</button>
+        </div>
+
+        <p id="lobby-status" style="margin-top: 15px; color: #ffbe0b; font-size: 14px;"></p>
+    </div>
+
+    <!-- GAME CANVAS -->
+    <div id="game-container">
+        <div style="margin-bottom: 10px;">
+            <span id="role-badge" class="badge"></span> Use WASD or Arrow Keys to move!
+        </div>
+        <canvas id="gameCanvas" width="800" height="500"></canvas>
+        <div id="status">Waiting for game update...</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const lobbyEl = document.getElementById("lobby");
+        const gameContainer = document.getElementById("game-container");
+        const lobbyStatus = document.getElementById("lobby-status");
+        const statusEl = document.getElementById("status");
+        const roleBadge = document.getElementById("role-badge");
+
+        let peer = null;
+        let conn = null;
+        let myRole = null; // 'p1' or 'p2'
+
+        const keys = {};
+        window.addEventListener("keydown", (e) => keys[e.code] = true);
+        window.addEventListener("keyup", (e) => keys[e.code] = false);
+
+        // --- MULTIPLAYER SETUP ---
+        function createRoom() {
+            const roomCode = Math.floor(1000 + Math.random() * 9000).toString();
+            peer = new Peer("together-game-" + roomCode);
+
+            peer.on('open', () => {
+                myRole = 'p1';
+                lobbyStatus.innerText = `Room Created! Tell Player 2 to join with Code: ${roomCode}`;
+            });
+
+            peer.on('connection', (c) => {
+                conn = c;
+                setupConnection();
+            });
+
+            peer.on('error', (err) => {
+                lobbyStatus.innerText = "Error creating room. Try again.";
+            });
+        }
+
+        function joinRoom() {
+            const code = document.getElementById("join-code").value.trim();
+            if (!code) return alert("Enter a code!");
+
+            peer = new Peer();
+            peer.on('open', () => {
+                myRole = 'p2';
+                conn = peer.connect("together-game-" + code);
+                setupConnection();
+            });
+        }
+
+        function setupConnection() {
+            conn.on('open', () => {
+                lobbyEl.style.display = 'none';
+                gameContainer.style.display = 'flex';
+                
+                if (myRole === 'p1') {
+                    roleBadge.innerText = "You are Player 1 (Blue)";
+                    roleBadge.className = "badge p1-badge";
+                } else {
+                    roleBadge.innerText = "You are Player 2 (Pink)";
+                    roleBadge.className = "badge p2-badge";
+                }
+
+                requestAnimationFrame(gameLoop);
+            });
+
+            conn.on('data', (data) => {
+                if (myRole === 'p2' && data.gameState) {
+                    // Host sends full game state to Client
+                    syncGameState(data.gameState);
+                } else if (myRole === 'p1' && data.inputs) {
+                    // Client sends inputs to Host
+                    p2Inputs = data.inputs;
+                }
+            });
+        }
+
+        // --- GAME LOGIC ---
+        let currentLevel = 0;
+        let p2Inputs = {};
+
+        const levels = [
+            {
+                p1Start: { x: 50, y: 100 },
+                p2Start: { x: 50, y: 350 },
+                walls: [
+                    { x: 0, y: 245, w: 800, h: 10 },
+                    { x: 400, y: 0, w: 20, h: 160 },
+                    { x: 400, y: 255, w: 20, h: 160 }
+                ],
+                plates: [
+                    { x: 250, y: 100, w: 30, h: 30, color: "#ff006e", targetDoor: 0, active: false },
+                    { x: 250, y: 350, w: 30, h: 30, color: "#3a86ff", targetDoor: 1, active: false }
+                ],
+                doors: [
+                    { x: 400, y: 160, w: 20, h: 85, color: "#ff006e", open: false },
+                    { x: 400, y: 415, w: 20, h: 85, color: "#3a86ff", open: false }
+                ],
+                exits: [
+                    { x: 720, y: 80, w: 40, h: 80 },
+                    { x: 720, y: 330, w: 40, h: 80 }
+                ]
+            }
+        ];
+
+        class Player {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.size = 24;
+                this.color = color;
+                this.speed = 3.5;
+            }
+
+            move(inputKeys, walls, doors) {
+                let dx = 0;
+                let dy = 0;
+
+                if (inputKeys["KeyW"] || inputKeys["ArrowUp"]) dy -= this.speed;
+                if (inputKeys["KeyS"] || inputKeys["ArrowDown"]) dy += this.speed;
+                if (inputKeys["KeyA"] || inputKeys["ArrowLeft"]) dx -= this.speed;
+                if (inputKeys["KeyD"] || inputKeys["ArrowRight"]) dx += this.speed;
+
+                this.x += dx;
+                if (this.checkCollision(walls, doors)) this.x -= dx;
+
+                this.y += dy;
+                if (this.checkCollision(walls, doors)) this.y -= dy;
+            }
+
+            checkCollision(walls, doors) {
+                if (this.x < 0 || this.x + this.size > canvas.width || 
+                    this.y < 0 || this.y + this.size > canvas.height) return true;
+
+                for (let wall of walls) if (this.intersects(wall)) return true;
+                for (let door of doors) if (!door.open && this.intersects(door)) return true;
+
+                return false;
+            }
+
+            intersects(rect) {
+                return this.x < rect.x + rect.w &&
+                       this.x + this.size > rect.x &&
+                       this.y < rect.y + rect.h &&
+                       this.y + this.size > rect.y;
+            }
+
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x, this.y, this.size, this.size);
+            }
+        }
+
+        let p1 = new Player(50, 100, "#3a86ff");
+        let p2 = new Player(50, 350, "#ff006e");
+
+        function syncGameState(state) {
+            p1.x = state.p1.x;
+            p1.y = state.p1.y;
+            p2.x = state.p2.x;
+            p2.y = state.p2.y;
+            levels[0].doors = state.doors;
+            levels[0].plates = state.plates;
+            statusEl.innerText = state.status;
+        }
+
+        function update() {
+            if (myRole === 'p1') {
+                const level = levels[0];
+
+                // P1 uses host controls, P2 uses sent inputs
+                p1.move(keys, level.walls, level.doors);
+                p2.move(p2Inputs, level.walls, level.doors);
+
+                // Check Pressure Plates
+                level.plates.forEach((plate) => {
+                    plate.active = p1.intersects(plate) || p2.intersects(plate);
+                    level.doors[plate.targetDoor].open = plate.active;
+                });
+
+                // Check Win
+                if (p1.intersects(level.exits[0]) && p2.intersects(level.exits[1])) {
+                    statusEl.innerText = "🎉 YOU BOTH ESCAPED TOGETHER!";
+                } else {
+                    statusEl.innerText = "Work together to open doors and reach the exits!";
+                }
+
+                // Send network packet to Player 2
+                if (conn && conn.open) {
+                    conn.send({
+                        gameState: {
+                            p1: { x: p1.x, y: p1.y },
+                            p2: { x: p2.x, y: p2.y },
+                            doors: level.doors,
+                            plates: level.plates,
+                            status: statusEl.innerText
+                        }
+                    });
+                }
+            } else if (myRole === 'p2') {
+                // Send inputs to Player 1
+                if (conn && conn.open) {
+                    conn.send({ inputs: keys });
+                }
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const level = levels[0];
+
+            // Plates
+            level.plates.forEach(plate => {
+                ctx.fillStyle = plate.active ? "#80b918" : plate.color;
+                ctx.globalAlpha = plate.active ? 1.0 : 0.5;
+                ctx.fillRect(plate.x, plate.y, plate.w, plate.h);
+                ctx.globalAlpha = 1.0;
+            });
+
+            // Doors
+            level.doors.forEach(door => {
+                if (!door.open) {
+                    ctx.fillStyle = door.color;
+                    ctx.fillRect(door.x, door.y, door.w, door.h);
+                }
+            });
+
+            // Walls
+            ctx.fillStyle = "#2b3548";
+            level.walls.forEach(wall => ctx.fillRect(wall.x, wall.y, wall.w, wall.h));
+
+            // Exits
+            level.exits.forEach(exit => {
+                ctx.fillStyle = "#52b788";
+                ctx.fillRect(exit.x, exit.y, exit.w, exit.h);
+            });
+
+            // Players
+            p1.draw();
+            p2.draw();
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+    </script>
+</body>
+</html>
